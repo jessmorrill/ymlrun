@@ -1,0 +1,195 @@
+---
+# ============================================================================
+#  Project 2 — your hardening playbook.   (ansible-pull runs THIS file)
+#
+#  ansible-pull looks for a file named local.yml at the root of your git repo,
+#  and runs it ON the box itself (no SSH, no inventory needed).
+#
+#  To apply it on your box:
+#     sudo ansible-pull -U https://github.com/<you>/<your-repo>.git
+#
+#  Goal: bring a broken box into the hardened target state (see the portal for
+#  the 14 tasks and exactly what each one checks). Your playbook must be
+#  IDEMPOTENT — running it a second time should report  changed=0.
+# ============================================================================
+
+- name: Project 2 hardening
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+
+    # ----- EXAMPLE (safe to keep) — shows the shape of a task -------------
+    - name: Example — make sure a package is present
+      ansible.builtin.package:
+        name: ca-certificates
+        state: present
+    # ---------------------------------------------------------------------
+
+    # ======================= Domain A — System / SSH =====================
+    # TODO: SSH — disallow root login and password auth, then restart ssh
+    #   (modules: ansible.builtin.lineinfile or blockinfile; ansible.builtin.service)
+    - name: Disable root login and password auth for SSH
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-course.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          PermitRootLogin no
+          PasswordAuthentication no
+      notify: Restart SSH
+    # TODO: Host firewall (UFW) — active, default-deny incoming, allow only SSH
+    #   (module: community.general.ufw, or ansible.builtin.command as a last resort)
+    - name: Allow SSH through UFW
+      community.general.ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+
+    - name: Default deny incoming
+      community.general.ufw:
+        default: deny
+        direction: incoming
+
+    - name: Default allow outgoing
+      community.general.ufw:
+        default: allow
+        direction: outgoing
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+    # TODO: Remove the unauthorized scheduled job
+    #   (module: ansible.builtin.file  state: absent  — or ansible.builtin.cron)
+    - name: Remove unauthorized scheduled job
+      ansible.builtin.file:
+        path: /etc/cron.d/net-health
+        state: absent
+    # TODO: Stop + disable + remove the unnecessary service
+    #   (modules: ansible.builtin.service; ansible.builtin.package state: absent)
+    - name: Stop and disable the unnecessary service
+      ansible.builtin.service:
+        name: ftp
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove the unnecessary service
+      ansible.builtin.package:
+        name: ftp
+        state: absent
+    # TODO: Install fail2ban and make sure it protects sshd
+    #   (modules: ansible.builtin.package; ansible.builtin.copy/template; service)
+    - name: Install fail2ban
+      ansible.builtin.package:
+        name: fail2ban
+        state: present
+    - name: Configure fail2ban for sshd
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+         [DEFAULT]
+         bantime  = 1h
+         findtime = 10m
+         maxretry = 5
+         banaction = ufw
+         ignoreip = 127.0.0.1/8
+
+         [sshd]
+         enabled = true
+         port    = ssh
+         backend = systemd
+      notify: Restart fail2ban
+    - name: start fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: started
+        enabled: true
+    # TODO: Fix the world-writable application directory
+    #   (module: ansible.builtin.file  mode/owner/group)
+    - name: Fix the world-writable application directory
+      ansible.builtin.file:
+        path: /srv/data/incoming
+        mode: '0750'
+        owner: root
+        group: root
+      
+    # ================= Domain B — Users / privilege escalation ===========
+    # TODO: Remove or lock the unauthorized sudo account
+    #   (module: ansible.builtin.user  state: absent  — or lock the password)
+    - name: Remove unauthorized sudo account
+      ansible.builtin.user:
+        name: monitor
+        state: absent
+    # TODO: Remove the passwordless-sudo (NOPASSWD) rule
+    #   (module: ansible.builtin.file  state: absent)
+    - name: Remove passwordless-sudo rule
+      ansible.builtin.file:
+        path: /etc/sudoers.d/90-course-nopasswd
+        state: absent
+    # TODO: Remove the unexpected SUID-root binary
+    #   (module: ansible.builtin.file  state: absent  — or fix the mode)
+    - name: Remove unexpected SUID-root binary
+      ansible.builtin.file:
+        path: /usr/local/bin/netcheck
+        state: absent
+    # TODO: Fix the account that has a blank password
+    #   (module: ansible.builtin.user  — set/lock the password)
+    - name: Lock the account with a blank password
+      ansible.builtin.user:
+        name: kioskuser
+        password_lock: yes
+    # TODO: Restrict the world-readable credentials file
+    #   (module: ansible.builtin.file  mode: "0600"  + owner)
+    - name: Restrict world-readable credentials file
+      ansible.builtin.file:
+        path: /opt/app/config.yml
+        mode: '0600'
+    # ================== Domain C — Database least-privilege ==============
+    # These need the community.mysql collection + pymysql. Install once:
+    #     ansible-galaxy collection install community.mysql
+    #     sudo apt-get install -y python3-pymysql
+    # TODO: Scope the webapp account to only what it needs (see the inventory)
+    - name: Scope webapp account to only what it needs
+      community.mysql.mysql_user:
+        name: webapp
+        host: "%"
+        priv: "webapp_db.*:SELECT,INSERT,UPDATE,DELETE"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+    # TODO: Scope the reporting account to read-only on its DB
+    - name: Scope reporting account to read-only on its DB
+      community.mysql.mysql_user:
+        name: reporting
+        host: "%"
+        priv: "reporting_db.*:SELECT"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+    # TODO: Tighten DB access hosts; drop anonymous/stale accounts
+    #   (module: community.mysql.mysql_user  — priv:, host:, login_unix_socket:)
+    - name: Remove anonymous accounts
+      community.mysql.mysql_user:
+        name: ''
+        host_all: yes
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: absent
+    - name: remove non localhost root
+      community.mysql.mysql_user:
+        name: root
+        host: "%"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: absent
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+    - name: Restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
