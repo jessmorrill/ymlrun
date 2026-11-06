@@ -159,7 +159,7 @@
       community.mysql.mysql_user:
         name: webapp
         host: "%"
-        priv: "webapp_db.*:SELECT,INSERT,UPDATE,DELETE"
+        priv: "portaldb.*:SELECT,INSERT,UPDATE,DELETE"
         login_unix_socket: /var/run/mysqld/mysqld.sock
         state: present
     # TODO: Scope the reporting account to read-only on its DB
@@ -167,7 +167,7 @@
       community.mysql.mysql_user:
         name: reporting
         host: "%"
-        priv: "reporting_db.*:SELECT"
+        priv: "portaldb.*:SELECT"
         login_unix_socket: /var/run/mysqld/mysqld.sock
         state: present
     # TODO: Tighten DB access hosts; drop anonymous/stale accounts
